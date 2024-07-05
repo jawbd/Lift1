@@ -1,0 +1,128 @@
+import tkinter as tk
+from tkinter import ttk
+from queue import Queue
+import threading
+import time
+
+class Lift:
+    def __init__(self, id, тип, этажи, update_callback):
+        self.id = id
+        self.тип = тип
+        self.текущий_этаж = 0
+        self.запросы = Queue()
+        self.этажи = этажи
+        self.занят = False  # Флаг для отслеживания состояния лифта (занят или свободен)
+        self.update_callback = update_callback
+
+    def двигаться(self):
+        while True:
+            if not self.запросы.empty():
+                self.занят = True
+                целевой_этаж = self.запросы.get()
+                while self.текущий_этаж != целевой_этаж:
+                    if self.текущий_этаж < целевой_этаж:
+                        self.текущий_этаж += 1
+                    else:
+                        self.текущий_этаж -= 1
+                    time.sleep(1)
+                    self.этажи[self.текущий_этаж].лифты[self.id] = True
+                    self.update_callback()
+                self.занят = False
+            time.sleep(1)
+
+    def добавить_запрос(self, этаж):
+        self.запросы.put(этаж)
+
+class СистемаЛифтов:
+    def __init__(self, кол_во_обычных, кол_во_грузовых, кол_во_этажей, update_callback):
+        self.этажи = [Этаж(i) for i in range(кол_во_этажей)]
+        self.обычные_лифты = [Lift(id=i, тип='обычный', этажи=self.этажи, update_callback=update_callback) for i in range(кол_во_обычных)]
+        self.грузовой_лифт = Lift(id=кол_во_обычных, тип='грузовой', этажи=self.этажи, update_callback=update_callback)
+        self.лифты = self.обычные_лифты + [self.грузовой_лифт]
+
+    def запустить(self):
+        for лифт in self.лифты:
+            threading.Thread(target=лифт.двигаться).start()
+
+    def запросить_лифт(self, этаж, целевой_этаж, грузовой=False):
+        if грузовой:
+            self.грузовой_лифт.добавить_запрос(этаж)
+            self.грузовой_лифт.добавить_запрос(целевой_этаж)
+        else:
+            лучший_лифт = self.найти_лучший_лифт(этаж)
+            лучший_лифт.добавить_запрос(этаж)
+            лучший_лифт.добавить_запрос(целевой_этаж)
+
+    def найти_лучший_лифт(self, этаж):
+        # Находим свободный и ближайший свободный лифт
+        доступные_лифты = [л for л in self.лифты if not л.занят]
+        if доступные_лифты:
+            лучший_лифт = min(доступные_лифты, key=lambda e: abs(e.текущий_этаж - этаж))
+        else:
+            # Если все лифты заняты, выбираем лифт, ближайший к запросу, но учитываем, что он может быть занят
+            лучший_лифт = min(self.лифты, key=lambda e: abs(e.текущий_этаж - этаж))
+        return лучший_лифт
+
+class Этаж:
+    def __init__(self, номер):
+        self.номер = номер
+        self.лифты = {}
+
+class Приложение(tk.Tk):
+    def __init__(self, система_лифтов):
+        super().__init__()
+        self.система_лифтов = система_лифтов
+        self.title("Система Лифтов")
+        self.geometry("300x600")
+        self.создать_виджеты()
+        self.обновить_лифты()
+
+    def создать_виджеты(self):
+        self.этажные_рамки = []
+        for этаж in reversed(self.система_лифтов.этажи):
+            рамка = ttk.Frame(self, padding=5)
+            рамка.pack(fill=tk.X)
+            метка = ttk.Label(рамка, text=f"Этаж {этаж.номер}")
+            метка.pack(side=tk.LEFT)
+            кнопка_вызова = ttk.Button(рамка, text="Вызвать", command=lambda e=этаж.номер: self.вызвать_лифт(e))
+            кнопка_вызова.pack(side=tk.RIGHT)
+            self.этажные_рамки.append(рамка)
+
+    def вызвать_лифт(self, этаж):
+        self.окно_выбора_этажа(этаж)
+
+    def окно_выбора_этажа(self, текущий_этаж):
+        окно = tk.Toplevel(self)
+        окно.title("Выбор этажа")
+        for этаж in self.система_лифтов.этажи:
+            if этаж.номер != текущий_этаж:
+                кнопка_этажа = ttk.Button(окно, text=f"Этаж {этаж.номер}",
+                                          command=lambda e=этаж.номер: self.выбрать_этаж(текущий_этаж, e, окно))
+                кнопка_этажа.pack(fill=tk.X)
+
+    def выбрать_этаж(self, текущий_этаж, целевой_этаж, окно):
+        self.система_лифтов.запросить_лифт(текущий_этаж, целевой_этаж)
+        окно.destroy()
+
+    def обновить_лифты(self):
+        for рамка in self.этажные_рамки:
+            for виджет in рамка.winfo_children():
+                if isinstance(виджет, ttk.Label) and "Лифт" in виджет.cget("text"):
+                    виджет.destroy()
+            номер_этажа = int(рамка.winfo_children()[0].cget("text").split()[-1])
+            лифты_на_этаже = [л for л in self.система_лифтов.лифты if л.текущий_этаж == номер_этажа]
+            for лифт in лифты_на_этаже:
+                метка = ttk.Label(рамка, text=f"Лифт {лифт.id} ({лифт.тип})")
+                метка.pack(side=tk.LEFT)
+        self.after(1000, self.обновить_лифты)
+
+# Настройка системы лифтов
+кол_во_этажей = 10
+система_лифтов = СистемаЛифтов(кол_во_обычных=2, кол_во_грузовых=1, кол_во_этажей=кол_во_этажей, update_callback=lambda: приложение.after(0, приложение.обновить_лифты))
+приложение = Приложение(система_лифтов)
+
+# Запуск системы лифтов в отдельном потоке
+threading.Thread(target=система_лифтов.запустить).start()
+
+# Запуск приложения
+приложение.mainloop()
